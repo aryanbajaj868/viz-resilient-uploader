@@ -1,0 +1,36 @@
+.App { padding: 20px; font-family: sans-serif; max-width: 800px; margin: 0 auto; }
+
+.upload-box { 
+    margin-bottom: 20px; 
+    padding: 20px; 
+    border: 2px dashed #ccc; 
+    background: #f9f9f9; 
+    text-align: center;
+}
+
+.status-bar { margin-bottom: 20px; }
+
+/* NEW: Metrics Styling */
+.metrics {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-weight: bold;
+    color: #555;
+    background: #e8f5e9; /* Light green background */
+    padding: 10px;
+    border-radius: 5px;
+}
+
+.progress-bar-bg { width: 100%; height: 20px; background: #eee; border-radius: 10px; overflow: hidden; }
+.progress-bar-fill { height: 100%; background: #4caf50; transition: width 0.3s; }
+
+/* Grid Visualization */
+.chunk-grid { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 20px; border: 1px solid #ddd; padding: 10px; }
+.chunk-box { width: 15px; height: 15px; background: #ddd; border-radius: 2px; }
+.chunk-box.PENDING { background: #e0e0e0; }
+.chunk-box.UPLOADING { background: #2196f3; } /* Blue */
+.chunk-box.UPLOADED { background: #4caf50; } /* Green */
+.chunk-box.ERROR { background: #f44336; } /* Red */
+
+.logs { margin-top: 30px; background: #222; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; font-family: monospace; font-size: 12px; }
