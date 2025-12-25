@@ -1,36 +1,113 @@
-.App { padding: 20px; font-family: sans-serif; max-width: 800px; margin: 0 auto; }
-
-.upload-box { 
-    margin-bottom: 20px; 
-    padding: 20px; 
-    border: 2px dashed #ccc; 
-    background: #f9f9f9; 
-    text-align: center;
-}
-
-.status-bar { margin-bottom: 20px; }
-
-/* NEW: Metrics Styling */
-.metrics {
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    background-color: #f3f4f6;
+    color: #1f2937;
+    padding: 2rem;
     display: flex;
-    justify-content: space-between;
-    margin-bottom: 10px;
-    font-weight: bold;
-    color: #555;
-    background: #e8f5e9; /* Light green background */
-    padding: 10px;
-    border-radius: 5px;
+    justify-content: center;
 }
 
-.progress-bar-bg { width: 100%; height: 20px; background: #eee; border-radius: 10px; overflow: hidden; }
-.progress-bar-fill { height: 100%; background: #4caf50; transition: width 0.3s; }
+.container {
+    background: white;
+    width: 100%;
+    max-width: 800px;
+    padding: 2rem;
+    border-radius: 12px;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+}
 
-/* Grid Visualization */
-.chunk-grid { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 20px; border: 1px solid #ddd; padding: 10px; }
-.chunk-box { width: 15px; height: 15px; background: #ddd; border-radius: 2px; }
-.chunk-box.PENDING { background: #e0e0e0; }
-.chunk-box.UPLOADING { background: #2196f3; } /* Blue */
-.chunk-box.UPLOADED { background: #4caf50; } /* Green */
-.chunk-box.ERROR { background: #f44336; } /* Red */
+h1 {
+    text-align: center;
+    color: #111827;
+    margin-bottom: 2rem;
+}
 
-.logs { margin-top: 30px; background: #222; color: #0f0; padding: 10px; height: 200px; overflow-y: scroll; font-family: monospace; font-size: 12px; }
+.upload-box {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    justify-content: center;
+}
+
+button {
+    background-color: #2563eb;
+    color: white;
+    padding: 0.5rem 1.5rem;
+    border: none;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+button:hover {
+    background-color: #1d4ed8;
+}
+
+button:disabled {
+    background-color: #9ca3af;
+    cursor: not-allowed;
+}
+
+.stats {
+    display: flex;
+    justify-content: space-around;
+    background: #f9fafb;
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    border: 1px solid #e5e7eb;
+}
+
+/* THE GRID SYSTEM */
+.grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(12px, 1fr));
+    gap: 2px;
+    margin-bottom: 2rem;
+    border: 1px solid #e5e7eb;
+    padding: 4px;
+    border-radius: 4px;
+    background: #fff;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.chunk {
+    height: 12px;
+    width: 100%;
+    background-color: #e5e7eb; /* Default: Gray (Pending) */
+    border-radius: 1px;
+}
+
+.chunk.uploading {
+    background-color: #3b82f6; /* Blue (Active) */
+    animation: pulse 1s infinite;
+}
+
+.chunk.success {
+    background-color: #10b981; /* Green (Done) */
+}
+
+/* IMPORTANT: THIS IS THE RED BLOCK FOR YOUR DEMO */
+.chunk.error {
+    background-color: #ef4444 !important; /* RED (Fail) */
+    border: 1px solid #b91c1c;
+}
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
+
+.logs {
+    background: #1f2937;
+    color: #10b981;
+    padding: 1rem;
+    border-radius: 8px;
+    height: 200px;
+    overflow-y: scroll;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.85rem;
+}

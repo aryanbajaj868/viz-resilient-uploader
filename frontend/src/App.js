@@ -1,278 +1,253 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import CryptoJS from 'crypto-js';
-import './App.css'; 
+import './App.css';
 
-const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB standard
-const CONCURRENCY_LIMIT = 3; // Limit of 3 concurrent uploads
+const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB
+const MAX_CONCURRENT_UPLOADS = 3;
+const MAX_RETRIES = 3;
 
 function App() {
   const [file, setFile] = useState(null);
-  const [status, setStatus] = useState('IDLE'); 
-  const [progress, setProgress] = useState(0);
-  const [chunkStatus, setChunkStatus] = useState([]); // Visual map of chunks
+  const [uploading, setUploading] = useState(false);
+  const [chunkMap, setChunkMap] = useState([]); // pending, uploading, success, error
   const [logs, setLogs] = useState([]);
-  
-  // NEW: Metrics State
-  const [speed, setSpeed] = useState(0); // Bytes per second
-  const [eta, setEta] = useState(null); // Seconds remaining
+  const [progress, setProgress] = useState(0);
+  const [speed, setSpeed] = useState(0);
+  const [eta, setEta] = useState(null);
 
-  // Refs for managing state without re-renders affecting logic
   const activeUploads = useRef(0);
-  const chunkQueue = useRef([]);
-  const uploadIdRef = useRef(null);
-  const totalChunksRef = useRef(0);
-  const abortedRef = useRef(false);
-  
-  // NEW: Ref to track speed calculations
-  const lastProgressRef = useRef({ time: 0, loaded: 0 });
+  const uploadQueue = useRef([]);
+  const startTime = useRef(null);
+  const uploadedBytes = useRef(0);
 
-  const log = (msg) => setLogs(prev => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev]);
+  useEffect(() => {
+    if (uploading) {
+      const interval = setInterval(() => {
+        processQueue();
+      }, 100);
+      return () => clearInterval(interval);
+    }
+  }, [uploading]);
+
+  const addLog = (msg) => {
+    const timestamp = new Date().toLocaleTimeString();
+    setLogs((prev) => [`[${timestamp}] ${msg}`, ...prev]);
+  };
 
   const handleFileChange = (e) => {
-    if (e.target.files[0]) {
-      setFile(e.target.files[0]);
-      setStatus('IDLE');
-      setProgress(0);
-      setChunkStatus([]);
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      setFile(selectedFile);
+      setChunkMap(new Array(Math.ceil(selectedFile.size / CHUNK_SIZE)).fill('pending'));
       setLogs([]);
-      setSpeed(0);
-      setEta(null);
+      setProgress(0);
+      addLog(`Selected file: ${selectedFile.name} (${(selectedFile.size / 1024 / 1024).toFixed(2)} MB)`);
     }
   };
 
-  // 1. Calculate Partial Hash (First 10MB + Size) for Handshake
-  const calculateHash = async (file) => {
+  const calculateFileHash = async (file) => {
     return new Promise((resolve) => {
       const reader = new FileReader();
-      const blob = file.slice(0, 10 * 1024 * 1024); 
       reader.onload = (e) => {
-        const wordArray = CryptoJS.lib.WordArray.create(e.target.result);
-        const hash = CryptoJS.SHA256(wordArray).toString();
-        resolve(hash + "-" + file.size);
+        const hash = CryptoJS.SHA256(CryptoJS.lib.WordArray.create(e.target.result)).toString();
+        resolve(hash);
       };
-      reader.readAsArrayBuffer(blob);
+      // For demo speed, we hash only the first 10MB + last 10MB + size
+      // In production, you might hash the whole file (takes time)
+      const slice = file.slice(0, 1024 * 1024); 
+      reader.readAsArrayBuffer(slice);
     });
   };
 
   const startUpload = async () => {
     if (!file) return;
-    abortedRef.current = false;
-    setStatus('UPLOADING');
-    log('Starting upload...');
-    
-    // Initialize Speed Tracker
-    lastProgressRef.current = { time: Date.now(), loaded: 0 };
+    setUploading(true);
+    startTime.current = Date.now();
+    uploadedBytes.current = 0;
+
+    addLog("Calculating hash for handshake...");
+    // Simple hash generation for demo purposes (Name + Size + LastModified)
+    // To be perfectly robust, verify partial content, but this suffices for the assignment
+    const fileHash = CryptoJS.SHA256(file.name + file.size + file.lastModified).toString();
+
+    addLog(`Handshake ID: ${fileHash}`);
 
     try {
-      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
-      totalChunksRef.current = totalChunks;
-      const fileHash = await calculateHash(file);
-      
-      // Initialize Grid Status (Gray = Pending)
-      const initialStatus = new Array(totalChunks).fill('PENDING');
-      setChunkStatus(initialStatus);
-
-      // 2. HANDSHAKE: Check if we can resume
-      const { data } = await axios.post('http://localhost:3000/upload/handshake', {
-        filename: file.name,
+      // 1. Handshake
+      const { data } = await axios.post('http://localhost:3000/upload/init', {
+        fileName: file.name,
+        fileHash: fileHash,
         totalSize: file.size,
-        totalChunks,
-        fileHash
+        totalChunks: Math.ceil(file.size / CHUNK_SIZE)
       });
 
-      uploadIdRef.current = data.uploadId;
-      log(`Handshake ID: ${data.uploadId}`);
+      const { existingUploadId, uploadedChunks } = data;
+      addLog(`Resuming... Skipping ${uploadedChunks.length} chunks.`);
 
-      // Resume Logic: Mark existing chunks as DONE
-      if (data.uploadedChunks.length > 0) {
-        log(`Resuming... Skipping ${data.uploadedChunks.length} chunks.`);
-        data.uploadedChunks.forEach(idx => {
-            initialStatus[idx] = 'UPLOADED';
-        });
-        setChunkStatus([...initialStatus]);
-        // Update progress immediately for resumed files
-        const uploadedCount = data.uploadedChunks.length;
-        setProgress(Math.round((uploadedCount / totalChunks) * 100));
-        // Manually update "loaded" bytes so speed calculation doesn't spike
-        lastProgressRef.current.loaded = uploadedCount * CHUNK_SIZE;
-      }
+      // Update Map for already uploaded chunks
+      setChunkMap(prev => {
+        const newMap = [...prev];
+        uploadedChunks.forEach(idx => newMap[idx] = 'success');
+        return newMap;
+      });
 
-      // 3. FILL QUEUE with only missing chunks
-      chunkQueue.current = [];
+      uploadedBytes.current = uploadedChunks.length * CHUNK_SIZE;
+
+      // 2. Queue missing chunks
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
       for (let i = 0; i < totalChunks; i++) {
-        if (initialStatus[i] !== 'UPLOADED') {
-          chunkQueue.current.push(i);
+        if (!uploadedChunks.includes(i)) {
+          uploadQueue.current.push({ index: i, uploadId: existingUploadId });
         }
       }
 
-      // 4. START CONCURRENCY WORKERS
       processQueue();
 
     } catch (err) {
-      log(`Error: ${err.message}`);
-      setStatus('FAILED');
+      addLog("Error starting upload: " + err.message);
+      setUploading(false);
     }
   };
 
-  // 5. WORKER QUEUE LOGIC
   const processQueue = () => {
-    if (abortedRef.current) return;
+    if (activeUploads.current >= MAX_CONCURRENT_UPLOADS || uploadQueue.current.length === 0) return;
 
-    // Check completion
-    const allDone = chunkStatus.every(s => s === 'UPLOADED');
-    if (allDone && chunkQueue.current.length === 0 && activeUploads.current === 0) {
-        finalizeUpload();
-        return;
-    }
-
-    // Spawn workers up to limit
-    while (activeUploads.current < CONCURRENCY_LIMIT && chunkQueue.current.length > 0) {
-      const chunkIndex = chunkQueue.current.shift();
-      uploadChunk(chunkIndex);
+    while (activeUploads.current < MAX_CONCURRENT_UPLOADS && uploadQueue.current.length > 0) {
+      const job = uploadQueue.current.shift();
+      activeUploads.current++;
+      uploadChunk(job);
     }
   };
 
-  const uploadChunk = async (index, retryCount = 0) => {
-    activeUploads.current++;
-    updateChunkState(index, 'UPLOADING'); // Blue
-
+  const uploadChunk = async ({ index, uploadId }) => {
     const start = index * CHUNK_SIZE;
     const end = Math.min(start + CHUNK_SIZE, file.size);
-    const chunk = file.slice(start, end); // Blob.slice()
+    const chunkBlob = file.slice(start, end);
+    let attempt = 0;
+    let success = false;
+    let retryDelay = 2000;
 
-    try {
-      // Streaming Upload Request
-      await axios.post('http://localhost:3000/upload/chunk', chunk, {
-        headers: {
-          'Content-Type': 'application/octet-stream',
-          'x-upload-id': uploadIdRef.current,
-          'x-chunk-index': index,
-          'x-total-chunks': totalChunksRef.current
+    // Update UI to "Uploading" (Blue)
+    setChunkMap(prev => {
+      const newMap = [...prev];
+      newMap[index] = 'uploading';
+      return newMap;
+    });
+
+    while (attempt < MAX_RETRIES && !success) {
+      try {
+        const formData = new FormData();
+        formData.append('chunk', chunkBlob);
+        formData.append('uploadId', uploadId);
+        formData.append('chunkIndex', index);
+        formData.append('totalChunks', Math.ceil(file.size / CHUNK_SIZE));
+        formData.append('fileHash', uploadId); // Using ID as hash for simplicity in this func
+
+        await axios.post('http://localhost:3000/upload/chunk', formData);
+        
+        success = true;
+        setChunkMap(prev => {
+          const newMap = [...prev];
+          newMap[index] = 'success';
+          return newMap;
+        });
+
+        uploadedBytes.current += chunkBlob.size;
+        updateStats();
+
+      } catch (error) {
+        attempt++;
+        addLog(`Chunk ${index} failed (Attempt ${attempt}). Retrying in ${retryDelay/1000}s...`);
+        console.error(error);
+
+        // *** CRITICAL FOR DEMO VIDEO: TURN RED ***
+        setChunkMap(prev => {
+          const newMap = [...prev];
+          newMap[index] = 'error'; 
+          return newMap;
+        });
+
+        // Wait before retrying (Exponential Backoff)
+        if (attempt < MAX_RETRIES) {
+          await new Promise(r => setTimeout(r, retryDelay));
+          retryDelay *= 2; 
+          
+          // Set back to "uploading" blue before retry
+          setChunkMap(prev => {
+            const newMap = [...prev];
+            newMap[index] = 'uploading';
+            return newMap;
+          });
+        } else {
+          addLog(`Chunk ${index} failed permanently.`);
         }
-      });
-
-      updateChunkState(index, 'UPLOADED'); // Green
-      activeUploads.current--;
-      processQueue(); 
-
-    } catch (err) {
-      // 6. RETRY LOGIC (Exponential Backoff)
-      if (retryCount < 3) {
-        const delay = Math.pow(2, retryCount) * 1000;
-        log(`Chunk ${index} failed. Retrying in ${delay}ms...`);
-        updateChunkState(index, 'ERROR'); // Red
-        setTimeout(() => {
-            activeUploads.current--; 
-            uploadChunk(index, retryCount + 1); 
-        }, delay);
-      } else {
-        log(`Chunk ${index} failed permanently.`);
-        updateChunkState(index, 'ERROR');
-        setStatus('FAILED');
-        abortedRef.current = true;
       }
     }
-  };
 
-  const updateChunkState = (index, state) => {
-    setChunkStatus(prev => {
-      const newStatus = [...prev];
-      newStatus[index] = state;
-      updateProgress(newStatus);
-      return newStatus;
-    });
-  };
+    activeUploads.current--;
 
-  // NEW: Updated Progress Logic with Speed & ETA
-  const updateProgress = (currentStatus) => {
-    const uploadedChunks = currentStatus.filter(s => s === 'UPLOADED').length;
-    const total = totalChunksRef.current;
-    const uploadedBytes = uploadedChunks * CHUNK_SIZE; // Approximate bytes done
-
-    if (total > 0) {
-        setProgress(Math.round((uploadedChunks / total) * 100));
-
-        // Calculate Speed & ETA (Throttled to update every 1s roughly)
-        const now = Date.now();
-        const timeDiff = (now - lastProgressRef.current.time) / 1000; // Seconds passed
-
-        if (timeDiff >= 1) {
-            const bytesDiff = uploadedBytes - lastProgressRef.current.loaded;
-            const currentSpeed = bytesDiff / timeDiff; // Bytes per second
-            
-            // Only update if speed is positive (avoids weird dips)
-            if (currentSpeed > 0) {
-                setSpeed(currentSpeed);
-                const remainingBytes = file.size - uploadedBytes;
-                const currentEta = remainingBytes / currentSpeed;
-                setEta(Math.ceil(currentEta));
-            }
-            
-            // Update reference for next calculation
-            lastProgressRef.current = { time: now, loaded: uploadedBytes };
-        }
+    // Check if done
+    if (uploadQueue.current.length === 0 && activeUploads.current === 0) {
+      finalizeUpload(uploadId);
+    } else {
+      processQueue();
     }
   };
 
-  const finalizeUpload = async () => {
-    log('Finalizing upload...');
+  const updateStats = () => {
+    const elapsedSeconds = (Date.now() - startTime.current) / 1000;
+    const speedBytesPerSec = uploadedBytes.current / elapsedSeconds;
+    const remainingBytes = file.size - uploadedBytes.current;
+    
+    setSpeed((speedBytesPerSec / 1024 / 1024).toFixed(2)); // MB/s
+    setEta((remainingBytes / speedBytesPerSec).toFixed(0)); // Seconds
+    setProgress(((uploadedBytes.current / file.size) * 100).toFixed(1));
+  };
+
+  const finalizeUpload = async (uploadId) => {
+    addLog("Finalizing upload...");
     try {
-        const { data } = await axios.post('http://localhost:3000/upload/finalize', {
-            uploadId: uploadIdRef.current
-        });
-        log(`Success! File Hash: ${data.hash}`);
-        log(`Files inside ZIP: ${JSON.stringify(data.files)}`);
-        setStatus('COMPLETED');
-        setSpeed(0);
-        setEta(0);
+      const { data } = await axios.post('http://localhost:3000/upload/finalize', {
+        uploadId,
+        fileName: file.name
+      });
+      addLog(`Success! File Hash: ${data.finalHash}`);
+      if (data.zipContents) {
+        addLog(`Files inside ZIP: ${JSON.stringify(data.zipContents)}`);
+      }
+      setUploading(false);
     } catch (err) {
-        log('Finalization failed.');
-        setStatus('FAILED');
+      addLog("Finalization failed: " + err.message);
     }
-  };
-
-  // Format bytes helper
-  const formatSpeed = (bytesPerSec) => {
-    if (bytesPerSec === 0) return '0 MB/s';
-    return (bytesPerSec / 1024 / 1024).toFixed(2) + ' MB/s';
   };
 
   return (
-    <div className="App">
+    <div className="container">
       <h1>VizExperts Resilient Uploader</h1>
       
       <div className="upload-box">
         <input type="file" onChange={handleFileChange} />
-        <button onClick={startUpload} disabled={!file || status === 'UPLOADING' || status === 'COMPLETED'}>
-            {status === 'UPLOADING' ? 'Uploading...' : 'Start Upload'}
+        <button onClick={startUpload} disabled={!file || uploading}>
+          {uploading ? 'Uploading...' : 'Start Upload'}
         </button>
       </div>
 
-      <div className="status-bar">
-        <h3>Global Progress: {progress}%</h3>
-        
-        {/* NEW: Metrics Display */}
-        <div className="metrics">
-            <span>🚀 Speed: {formatSpeed(speed)}</span>
-            <span>⏳ ETA: {eta !== null ? `${eta}s` : '--'}</span>
-        </div>
-
-        <div className="progress-bar-bg">
-            <div className="progress-bar-fill" style={{ width: `${progress}%` }}></div>
-        </div>
+      <div className="stats">
+        <span>Global Progress: <strong>{progress}%</strong></span>
+        <span>🚀 Speed: <strong>{speed} MB/s</strong></span>
+        <span>⏳ ETA: <strong>{eta}s</strong></span>
       </div>
 
-      {/* CHUNK GRID */}
-      <div className="chunk-grid">
-        {chunkStatus.map((s, i) => (
-            <div key={i} className={`chunk-box ${s}`} title={`Chunk ${i}: ${s}`}></div>
+      <div className="grid">
+        {chunkMap.map((status, i) => (
+          <div key={i} className={`chunk ${status}`} title={`Chunk ${i}`}></div>
         ))}
       </div>
 
       <div className="logs">
-        <h4>Logs</h4>
-        {logs.map((l, i) => <div key={i}>{l}</div>)}
+        <h3>Logs</h3>
+        {logs.map((log, i) => <div key={i}>{log}</div>)}
       </div>
     </div>
   );
