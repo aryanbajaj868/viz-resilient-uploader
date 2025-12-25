@@ -93,12 +93,33 @@ Follow these steps to see the fault-tolerant nature of the system:
 *   **Race Conditions**: Handled via transaction-locked finalize steps.
 *   **Huge Files**: Constant RAM usage ensures the server doesn't crash on 10GB+ files.
 
+## ⚖️ Trade-offs & Design Decisions
+
+1.  **MySQL vs. NoSQL:**
+    * *Decision:* Used MySQL (Relational) for strict consistency and ACID compliance on transactions.
+    * *Trade-off:* For extremely high-scale systems (millions of concurrent chunks), a NoSQL DB like Redis or Cassandra might offer faster write speeds for chunk tracking, but MySQL ensures data integrity which was prioritized here.
+
+2.  **Local Filesystem vs. Cloud Storage:**
+    * *Decision:* Wrote chunks directly to the local disk (\`fs.writeStream\`).
+    * *Trade-off:* This works perfectly for a single server but wouldn't scale horizontally. In a production cloud environment, we would stream directly to AWS S3 using multi-part uploads to handle stateless scaling.
+
+3.  **Polling vs. WebSockets:**
+    * *Decision:* The frontend calculates progress based on successful HTTP responses.
+    * *Trade-off:* WebSockets would provide "real-time" server status, but they add complexity and require stateful connections. The current request-response model is more robust against network drops (stateless).
+
+## 🔮 Future Enhancements
+
+1.  **Cloud Integration:** Replace local disk storage with an S3-compatible object store for infinite scalability.
+2.  **User Authentication:** Add JWT-based auth so users can only see and resume their own files.
+3.  **Compression:** Implement server-side compression (gzip) for non-zip files to save storage space.
+4.  **Expiry Policies:** Allow users to set a "Time to Live" (TTL) for files, automatically cleaning them up after downloading.
+
 ---
 
 ## 👤 Author
 
 **Aryan Bajaj**  
-Metallurgical Engineering, IIT (BHU)
+IIT BHU Varanasi
 
 ---
 
