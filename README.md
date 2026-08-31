@@ -1,4 +1,4 @@
-# VizExperts – Resilient Uploader 🚀
+# Resilient Uploader 🚀
 
 A robust, fault-tolerant file upload system designed to reliably handle large files (1GB+) over unstable networks. This project implements a custom chunked upload protocol with concurrency control, resumability, automatic retries, and constant-memory streaming on the backend.
 
