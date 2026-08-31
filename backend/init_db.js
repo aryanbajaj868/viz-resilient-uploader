@@ -4,7 +4,7 @@ const dbConfig = {
     host: 'localhost',
     user: 'root',             // Using ROOT to force entry
     password: 'rootpassword', // Matches your new docker-compose.yml
-    database: 'viz_upload_db' // We will try to connect to this
+    database: 'uploader_db' // We will try to connect to this
 };
 
 async function initDB() {
@@ -17,14 +17,14 @@ async function initDB() {
             connection = await mysql.createConnection(dbConfig);
         } catch (err) {
             // If DB doesn't exist, connect without selecting one
-            console.log("Database 'viz_upload_db' might not exist. Creating it...");
+            console.log("Database 'uploader_db' might not exist. Creating it...");
             connection = await mysql.createConnection({
                 host: 'localhost', 
                 user: 'root', 
                 password: 'user_password'
             });
-            await connection.execute(`CREATE DATABASE IF NOT EXISTS viz_upload_db`);
-            await connection.changeUser({ database: 'viz_upload_db' });
+            await connection.execute(`CREATE DATABASE IF NOT EXISTS uploader_db`);
+            await connection.changeUser({ database: 'uploader_db' });
         }
 
         console.log("✅ Connected! Initializing Tables...");
@@ -59,7 +59,7 @@ async function initDB() {
         console.log("🔧 Fixing 'user' permissions for the server...");
         try {
             await connection.execute(`CREATE USER IF NOT EXISTS 'user'@'%' IDENTIFIED BY 'user_password'`);
-            await connection.execute(`GRANT ALL PRIVILEGES ON viz_upload_db.* TO 'user'@'%'`);
+            await connection.execute(`GRANT ALL PRIVILEGES ON uploader_db.* TO 'user'@'%'`);
             await connection.execute(`FLUSH PRIVILEGES`);
         } catch (e) {
             console.log("User permission note: " + e.message);

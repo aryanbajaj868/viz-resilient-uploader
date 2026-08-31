@@ -4,7 +4,7 @@ const config = {
     host: 'localhost',
     user: 'root',
     password: 'rootpassword', // The password you confirmed
-    database: 'viz_upload_db'
+    database: 'uploader_db'
 };
 
 (async () => {

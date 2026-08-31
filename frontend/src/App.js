@@ -46,18 +46,19 @@ function App() {
     }
   };
 
-  const calculateFileHash = async (file) => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const hash = CryptoJS.SHA256(CryptoJS.lib.WordArray.create(e.target.result)).toString();
-        resolve(hash);
-      };
-      // For demo speed, we hash only the first 10MB + last 10MB + size
-      // In production, you might hash the whole file (takes time)
-      const slice = file.slice(0, 1024 * 1024); 
-      reader.readAsArrayBuffer(slice);
-    });
+  // Progressive SHA-256 of the FULL file content. Reads 8MB slices so
+  // memory stays constant regardless of file size (works on multi-GB files).
+  const calculateContentHash = async (file, onProgress) => {
+    const HASH_SLICE = 8 * 1024 * 1024;
+    const hasher = CryptoJS.algo.SHA256.create();
+    let offset = 0;
+    while (offset < file.size) {
+      const buf = await file.slice(offset, offset + HASH_SLICE).arrayBuffer();
+      hasher.update(CryptoJS.lib.WordArray.create(buf));
+      offset += HASH_SLICE;
+      if (onProgress) onProgress(Math.min(100, (offset / file.size) * 100));
+    }
+    return hasher.finalize().toString();
   };
 
   const startUpload = async () => {
@@ -66,23 +67,28 @@ function App() {
     startTime.current = Date.now();
     uploadedBytes.current = 0;
 
-    addLog("Calculating hash for handshake...");
-    // Simple hash generation for demo purposes (Name + Size + LastModified)
-    // To be perfectly robust, verify partial content, but this suffices for the assignment
-    const fileHash = CryptoJS.SHA256(file.name + file.size + file.lastModified).toString();
-
-    addLog(`Handshake ID: ${fileHash}`);
+    addLog("Hashing file content (SHA-256) for handshake + integrity check...");
+    const contentHash = await calculateContentHash(file, (pct) => {
+      if (pct % 25 < 1) addLog(`Hashing... ${pct.toFixed(0)}%`);
+    });
+    addLog(`Content hash: ${contentHash}`);
 
     try {
       // 1. Handshake
       const { data } = await axios.post('http://localhost:3000/upload/init', {
         fileName: file.name,
-        fileHash: fileHash,
+        contentHash: contentHash,
         totalSize: file.size,
         totalChunks: Math.ceil(file.size / CHUNK_SIZE)
       });
 
-      const { existingUploadId, uploadedChunks } = data;
+      const { existingUploadId, uploadedChunks, alreadyCompleted } = data;
+      if (alreadyCompleted) {
+        addLog("Server already has this exact file (verified by content hash). Nothing to upload.");
+        setUploading(false);
+        setProgress(100);
+        return;
+      }
       addLog(`Resuming... Skipping ${uploadedChunks.length} chunks.`);
 
       // Update Map for already uploaded chunks
@@ -142,7 +148,6 @@ function App() {
         formData.append('uploadId', uploadId);
         formData.append('chunkIndex', index);
         formData.append('totalChunks', Math.ceil(file.size / CHUNK_SIZE));
-        formData.append('fileHash', uploadId); // Using ID as hash for simplicity in this func
 
         await axios.post('http://localhost:3000/upload/chunk', formData);
         
@@ -187,8 +192,13 @@ function App() {
 
     activeUploads.current--;
 
-    // Check if done
+    // Check if done — never finalize with permanently failed chunks
     if (uploadQueue.current.length === 0 && activeUploads.current === 0) {
+      if (!success) {
+        addLog("Upload halted: some chunks failed permanently. Fix the connection and click Start Upload to resume.");
+        setUploading(false);
+        return;
+      }
       finalizeUpload(uploadId);
     } else {
       processQueue();
@@ -212,19 +222,28 @@ function App() {
         uploadId,
         fileName: file.name
       });
-      addLog(`Success! File Hash: ${data.finalHash}`);
+      addLog(data.verified
+        ? `✅ Integrity VERIFIED — server hash matches client hash: ${data.finalHash}`
+        : `Server hash: ${data.finalHash}`);
       if (data.zipContents) {
         addLog(`Files inside ZIP: ${JSON.stringify(data.zipContents)}`);
       }
       setUploading(false);
     } catch (err) {
-      addLog("Finalization failed: " + err.message);
+      if (err.response && err.response.status === 422) {
+        addLog(`❌ INTEGRITY CHECK FAILED — expected ${err.response.data.expected}, got ${err.response.data.actual}`);
+      } else if (err.response && err.response.status === 409) {
+        addLog("Finalize refused: " + err.response.data.error);
+      } else {
+        addLog("Finalization failed: " + err.message);
+      }
+      setUploading(false);
     }
   };
 
   return (
     <div className="container">
-      <h1>VizExperts Resilient Uploader</h1>
+      <h1>Resilient Uploader</h1>
       
       <div className="upload-box">
         <input type="file" onChange={handleFileChange} />
